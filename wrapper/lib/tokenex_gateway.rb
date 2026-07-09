@@ -19,12 +19,13 @@ configure do
   set :default_open_timeout, 25
   set :default_read_timeout, 45
   set :supported_actions, %w[authorize capture purchase refund void reverse]
-  set :creditcard_parameters, %w[first_name last_name number month year verification_value brand track_data track_1_data track_2_data]
+  set :creditcard_parameters, %w[first_name last_name number month year verification_value brand track_data track_1_data track_2_data source payment_cryptogram eci transaction_id]
+  set :wallet_source_map, { 'apple_pay' => :apple_pay, 'google_pay' => :android_pay }
   set :check_parameters, %w[name routing_number account_number bank_name account_type account_holder_type number institution_number transit_number]
   set :sensitive_fields, %w[
-    account_number drivers_license_number number password pem pem_password
-    private_key ssl_cert ssl_key ssl_key_password track_data track_1_data
-    track_2_data verification_value
+    account_number drivers_license_number number password payment_cryptogram
+    pem pem_password private_key ssl_cert ssl_key ssl_key_password
+    track_data track_1_data track_2_data verification_value
   ]
 end
 
@@ -302,7 +303,21 @@ post '/process', provides: :json do
         cc_options['month'] = cc_options['month'][1..] if !cc_options['month'].nil? && cc_options['month'].start_with?('0')
         cc_options['brand'] = ActiveMerchant::Billing::CreditCard.brand?(cc_options['number']) if !cc_options['number'].nil? && cc_options['brand'].nil?
 
-        am_payment = ActiveMerchant::Billing::CreditCard.new(cc_options)
+        # IXOONE-3 wallet branch: if a wallet `source` is present, build a
+        # NetworkTokenizationCreditCard so the cryptogram/ECI flow through to
+        # the downstream acquirer. Map the public product name to the gem's
+        # internal symbol; reject unknown sources loudly (the gem otherwise
+        # silently falls back to :apple_pay on any unrecognised value).
+        if cc_options['source']
+          mapped = settings.wallet_source_map[cc_options['source'].to_s.downcase]
+          if mapped.nil?
+            raise Utils::ValidationError, build_error(:unsupported, "Unsupported wallet source: #{cc_options['source']}")
+          end
+          cc_options['source'] = mapped
+          am_payment = ActiveMerchant::Billing::NetworkTokenizationCreditCard.new(cc_options)
+        else
+          am_payment = ActiveMerchant::Billing::CreditCard.new(cc_options)
+        end
 
         if !cc_options['month'].nil? && !am_payment.valid_month?(am_payment.month)
           raise Utils::ValidationError, build_error(:unsupported, "Invalid value for creditcard expiration month: #{am_payment.month}")
