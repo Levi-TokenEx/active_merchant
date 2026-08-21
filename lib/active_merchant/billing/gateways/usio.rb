@@ -1,10 +1,8 @@
 module ActiveMerchant # :nodoc:
   module Billing # :nodoc:
-    # Field names below (CardNumber/ExpDate/AuthOnly/ConfirmationID/secure3D/Status/Message)
-    # come from the USIO Payments API 2.0 docs (payments.usiopay.com/2.0/documentation) and
-    # from the PBP-1330/CONN-2821 scoping thread, not from a verified sandbox exchange yet.
-    # Confirm exact field names/casing against a live SubmitTokenPayment/PinlessMark/
-    # SubmitCCVoid call before relying on this in production.
+    # AVS/CVV response mapping is
+    # deliberately not implemented - USIO's own team never confirmed whether/how that data
+    # is returned
     class UsioGateway < Gateway
       self.test_url = 'https://devpayments.usiopay.com/2.0/payments.svc/JSON/'
       self.live_url = 'https://payments.usiopay.com/2.0/payments.svc/JSON/'
@@ -63,6 +61,13 @@ module ActiveMerchant # :nodoc:
         commit('SubmitCCVoid', post)
       end
 
+      def verify(payment, options = {})
+        MultiResponse.run(:use_first_response) do |r|
+          r.process { authorize(100, payment, options) }
+          r.process(:ignore_result) { void(r.authorization, options) }
+        end
+      end
+
       def supports_scrubbing?
         true
       end
@@ -95,11 +100,6 @@ module ActiveMerchant # :nodoc:
         post[:Zip] = address[:zip]
       end
 
-      # ProcessTransactionWithToken always detokenizes back to a full PAN
-      # before this gateway is invoked, so the CreditCard branch below is the
-      # one exercised in practice today. The String branch is kept for parity
-      # in case USIO's own permanent-token flow (SubmitCCVoid's ConfirmationID,
-      # not a TokenEx token) is wired up as a payment source later.
       def add_payment(post, payment)
         if payment.is_a?(String)
           post[:ConfirmationID] = payment
@@ -137,7 +137,12 @@ module ActiveMerchant # :nodoc:
         parameters[:Login] = @options[:login]
         parameters[:Password] = @options[:password]
 
-        response = parse(ssl_post(url(action), post_data(parameters), headers))
+        response =
+          begin
+            parse(ssl_post(url(action), post_data(parameters), headers))
+          rescue ResponseError => e
+            parse(e.response.body)
+          end
 
         Response.new(
           success_from(response),

@@ -1591,6 +1591,16 @@ usa_epay_advanced:
   password: Y
   software_id: Z
 
+usio:
+  merchant_id: merchant_id
+  login: login
+  password: password
+
+usio_ach:
+  merchant_id: merchant_id
+  login: login
+  password: password
+
 valitor:
   login: WebsiteID
   password: SecurityNumber

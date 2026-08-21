@@ -99,7 +99,12 @@ module ActiveMerchant # :nodoc:
         parameters[:Login] = @options[:login]
         parameters[:Password] = @options[:password]
 
-        response = parse(ssl_post(url(action), post_data(parameters), headers))
+        response =
+          begin
+            parse(ssl_post(url(action), post_data(parameters), headers))
+          rescue ResponseError => e
+            parse(e.response.body)
+          end
 
         Response.new(
           success_from(response),
