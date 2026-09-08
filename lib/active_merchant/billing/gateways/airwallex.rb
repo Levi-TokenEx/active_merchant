@@ -156,8 +156,8 @@ module ActiveMerchant # :nodoc:
         base_url + endpoint
       end
 
-      def add_referrer_data(post)
-        post[:referrer_data] = { type: 'spreedly' }
+      def add_referrer_data(post, options)
+        post[:referrer_data] = options[:referrer_data] || { type: 'ixopay' }
       end
 
       def create_payment_intent(money, options = {})
@@ -166,7 +166,7 @@ module ActiveMerchant # :nodoc:
         add_order(post, options)
         post[:request_id] = "#{request_id(options)}_setup"
         post[:merchant_order_id] = merchant_order_id(options)
-        add_referrer_data(post)
+        add_referrer_data(post, options)
         add_descriptor(post, options)
         post['payment_method_options'] = { 'card' => { 'risk_control' => { 'three_ds_action' => 'SKIP_3DS' } } } if options[:skip_3ds]
 
