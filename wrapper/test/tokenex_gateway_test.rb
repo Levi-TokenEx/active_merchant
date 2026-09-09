@@ -223,6 +223,50 @@ class TokenExGatewayTest < Minitest::Test
     TokenExGateway::BLOCK_GATEWAYS.replace(original)
   end
 
+  def test_debug_tokenexids_does_not_raise_and_logs_transcript
+    # Regression test: the debug hook used to call am_gateway.last_request /
+    # am_gateway.last_response, methods that don't exist on ActiveMerchant
+    # gateways, which raised NoMethodError and discarded a successful response.
+    original = TokenExGateway::DEBUG_TOKENEXIDS.dup
+    TokenExGateway::DEBUG_TOKENEXIDS.push('1234567890')
+
+    payload = {
+      'tokenex_id' => '1234567890',
+      'ref' => 'test_ref_debug',
+      'gateway' => { 'name' => 'BogusGateway' },
+      'transaction' => { 'action' => 'authorize', 'amount' => 100 },
+      'credit_card' => {
+        'first_name' => 'Test',
+        'last_name' => 'User',
+        'number' => '1',
+        'month' => '9',
+        'year' => (Time.now.year + 1).to_s,
+        'verification_value' => '123'
+      }
+    }
+    post '/process', payload.to_json, { 'CONTENT_TYPE' => 'application/json' }
+    assert last_response.ok?
+    result = JSON.parse(last_response.body)
+    assert result['success'], "Expected success, got: #{result.inspect}"
+  ensure
+    TokenExGateway::DEBUG_TOKENEXIDS.replace(original)
+  end
+
+  def test_annotate_transcript_labels_sent_and_received_lines
+    utils = Class.new { include Utils }.new
+    transcript = <<~TRANSCRIPT
+      opening connection to api-demo.airwallex.com:443...
+      <- "POST /api/v1/pa/payment_intents/create HTTP/1.1\\r\\n\\r\\n"
+      -> "HTTP/1.1 201 Created\\r\\n"
+    TRANSCRIPT
+
+    annotated = utils.annotate_transcript(transcript)
+
+    assert_includes annotated, 'opening connection to api-demo.airwallex.com:443...'
+    assert_includes annotated, 'Request sent by IXOPAY: "POST /api/v1/pa/payment_intents/create HTTP/1.1\r\n\r\n"'
+    assert_includes annotated, 'Response recieved by IXOPAY: "HTTP/1.1 201 Created\r\n"'
+  end
+
   def test_stripe_metadata_conversion
     payload = {
       'gateway' => { 'name' => 'StripeGateway', 'login' => 'sk_test_fake' },

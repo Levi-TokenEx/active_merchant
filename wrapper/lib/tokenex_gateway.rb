@@ -2,6 +2,7 @@ require 'sinatra'
 require 'active_support/core_ext/enumerable'
 require 'active_merchant'
 require 'json'
+require 'stringio'
 require_relative 'config'
 require_relative 'version'
 require_relative 'error_utils'
@@ -85,6 +86,20 @@ module Utils
     end
   end
 
+  # Net::HTTP's debug_output prefixes outgoing lines with "<- " and incoming
+  # lines with "-> "; relabel those so a wiredump transcript reads clearly.
+  def annotate_transcript(transcript)
+    transcript.each_line.map do |line|
+      if line.start_with?('<- ')
+        "Request sent by IXOPAY: #{line.delete_prefix('<- ')}"
+      elsif line.start_with?('-> ')
+        "Response recieved by IXOPAY: #{line.delete_prefix('-> ')}"
+      else
+        line
+      end
+    end.join
+  end
+
   def log(request_info, logtype, message)
     log_entry = Time.now.to_s
     log_entry += " LogType:#{logtype}"
@@ -105,7 +120,7 @@ module Utils
   end
 
   def symbolize_keys(myhash)
-    myhash.each_key do |key|
+    myhash.keys.each do |key|
       symbolize_keys(myhash[key]) if myhash[key].is_a?(Hash)
       myhash[(key.to_sym rescue key) || key] = myhash.delete(key)
     end
@@ -289,6 +304,12 @@ post '/process', provides: :json do
       GatewayCompatibility.apply_credential_shim(gateway_options['name'], login_options)
       am_gateway = am_gateway_name.new(login_options)
 
+      debug_wiredump = nil
+      if TokenExGateway::DEBUG_TOKENEXIDS.include?(request_info[:token_ex_id])
+        debug_wiredump = StringIO.new
+        am_gateway.wiredump_device = debug_wiredump
+      end
+
       # Validate gateway can respond to method
       unless am_gateway.respond_to?(transaction_options['action'].downcase)
         raise Utils::ValidationError, build_error(:unsupported, "Unsupported gateway action: #{gateway_options['name']} - #{transaction_options['action']}")
@@ -418,9 +439,12 @@ post '/process', provides: :json do
       log_final(request_info, final)
 
       # Debug logging
-      if TokenExGateway::DEBUG_TOKENEXIDS.include?(request_info[:token_ex_id])
-        log(request_info, 'Raw Request', am_gateway.last_request) unless am_gateway.last_request.nil?
-        log(request_info, 'Raw Response', am_gateway.last_response.body) unless am_gateway.last_response.nil?
+      if debug_wiredump
+        transcript = debug_wiredump.string
+        transcript = am_gateway.scrub(transcript) if am_gateway.supports_scrubbing?
+        transcript = annotate_transcript(transcript)
+        log(request_info, 'Raw Transcript', transcript)
+        puts "LogType:RawTranscript TokenExId:#{request_info[:token_ex_id]} Reference:#{request_info[:reference]} Message:#{transcript}"
       end
 
       final
@@ -463,19 +487,9 @@ post '/process', provides: :json do
       log_msg = "#{e} #{e.backtrace.join("\n   ")}"
       log(request_info, 'Exception', log_msg)
 
-      if !am_gateway.nil? && !am_gateway.last_response.nil?
-        msg = 'Error: TokenEx was unable to interpret results from the Payment Gateway. Reference the error_body field for the Payment Gateway response.'
-        am_response = ActiveMerchant::Billing::Response.new(false, msg,
-                                                            { error_code: am_gateway.last_response.code, error_body: clean_string_encoding(am_gateway.last_response.body) },
-                                                            { test: am_gateway.test? })
-        final = finalize_response(am_response)
-        log_final(request_info, final)
-        final
-      else
-        error = build_error(:unknown)
-        log(request_info, 'Error', error)
-        error
-      end
+      error = build_error(:unknown)
+      log(request_info, 'Error', error)
+      error
     end
   rescue StandardError => e
     # Last ditch catch
