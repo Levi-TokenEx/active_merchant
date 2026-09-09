@@ -10,3 +10,7 @@ Gemfile*.lock
 .rvmrc
 /doc/
 .ruby-version
+/vendor/bundle/ruby/3.3.0
+/.bundle
+/.claude
+/.vs
