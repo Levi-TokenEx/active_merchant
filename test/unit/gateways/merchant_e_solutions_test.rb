@@ -456,6 +456,82 @@ class MerchantESolutionsTest < Test::Unit::TestCase
   end
 
   # ------------------------------------------------------------------
+  # merchant_initiated (MIT) -- not in the certification script, which only
+  # exercises C101 (cardholder-initiated). Required for interchange.
+  # ------------------------------------------------------------------
+
+  def test_merchant_initiated_submitted_on_purchase
+    mit = @stored_credential_options.merge(
+      cit_mit_indicator: 'M102', merchant_initiated: 'Y', transaction_id: 'prior-txn-99'
+    )
+    stub_comms(@gateway, :ssl_request) do
+      @gateway.purchase(@amount, @credit_card, mit)
+    end.check_request do |_method, _endpoint, data, _headers|
+      assert_match(/merchant_initiated=Y/, data)
+      assert_match(/cit_mit_indicator=M102/, data)
+      assert_match(/card_on_file=Y/, data)
+      assert_match(/account_data_source=Y/, data)
+      assert_match(/transaction_id=prior-txn-99/, data)
+    end.respond_with(successful_purchase_response)
+  end
+
+  def test_merchant_initiated_submitted_on_authorize
+    stub_comms(@gateway, :ssl_request) do
+      @gateway.authorize(@amount, @credit_card, @stored_credential_options.merge(merchant_initiated: 'Y'))
+    end.check_request do |_method, _endpoint, data, _headers|
+      assert_match(/merchant_initiated=Y/, data)
+    end.respond_with(successful_authorization_response)
+  end
+
+  def test_merchant_initiated_omitted_when_not_supplied
+    stub_comms(@gateway, :ssl_request) do
+      @gateway.purchase(@amount, @credit_card, @stored_credential_options)
+    end.check_request do |_method, _endpoint, data, _headers|
+      assert_no_match(/merchant_initiated/, data)
+    end.respond_with(successful_purchase_response)
+  end
+
+  # ------------------------------------------------------------------
+  # options[:customer] -> client_reference_number on authorize/purchase.
+  # The other six entry points already did this; these two did not.
+  # ------------------------------------------------------------------
+
+  def test_customer_maps_to_client_reference_number_on_purchase
+    stub_comms(@gateway, :ssl_request) do
+      @gateway.purchase(@amount, @credit_card, @options.merge(customer: 'CUST-4711'))
+    end.check_request do |_method, _endpoint, data, _headers|
+      assert_match(/client_reference_number=CUST-4711/, data)
+    end.respond_with(successful_purchase_response)
+  end
+
+  def test_customer_maps_to_client_reference_number_on_authorize
+    stub_comms(@gateway, :ssl_request) do
+      @gateway.authorize(@amount, @credit_card, @options.merge(customer: 'CUST-4711'))
+    end.check_request do |_method, _endpoint, data, _headers|
+      assert_match(/client_reference_number=CUST-4711/, data)
+    end.respond_with(successful_authorization_response)
+  end
+
+  # An explicitly supplied client_reference_number outranks the :customer alias.
+  def test_explicit_client_reference_number_wins_over_customer
+    opts = @options.merge(customer: 'CUST-4711', client_reference_number: '345892')
+    stub_comms(@gateway, :ssl_request) do
+      @gateway.purchase(@amount, @credit_card, opts)
+    end.check_request do |_method, _endpoint, data, _headers|
+      assert_match(/client_reference_number=345892/, data)
+      assert_no_match(/CUST-4711/, data)
+    end.respond_with(successful_purchase_response)
+  end
+
+  def test_client_reference_number_omitted_when_neither_supplied
+    stub_comms(@gateway, :ssl_request) do
+      @gateway.purchase(@amount, @credit_card, @options)
+    end.check_request do |_method, _endpoint, data, _headers|
+      assert_no_match(/client_reference_number/, data)
+    end.respond_with(successful_purchase_response)
+  end
+
+  # ------------------------------------------------------------------
   # Certification payload regression guards
   # Reproduce the exact param sets from the MeS Trident test script so a
   # future refactor cannot silently drop a required certification field.
