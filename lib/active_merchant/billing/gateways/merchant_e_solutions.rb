@@ -257,13 +257,30 @@ module ActiveMerchant # :nodoc:
       end
 
       def add_stored_credentials(post, options)
-        post[:client_reference_number] = options[:client_reference_number] if options[:client_reference_number]
+        # options[:customer] is the ActiveMerchant convention for the gateway's
+        # customer reference field; capture/credit/refund/void/unstore/store already
+        # map it onto client_reference_number, but authorize/purchase did not, so a
+        # :customer on a sale was silently dropped. An explicit
+        # :client_reference_number takes precedence over the alias.
+        #
+        # Spec note: client_reference_number is AN(96) and the spec says "Do not
+        # send & or =". No sanitising happens here, matching the six pre-existing
+        # call sites -- CGI.escape keeps the wire valid, but MeS decodes those
+        # characters back out, so callers should avoid them.
+        client_reference_number = options[:client_reference_number] || options[:customer]
+        post[:client_reference_number] = client_reference_number if client_reference_number
         post[:moto_ecommerce_ind] = options[:moto_ecommerce_ind] if options[:moto_ecommerce_ind]
         post[:recurring_pmt_num] = options[:recurring_pmt_num] if options[:recurring_pmt_num]
         post[:recurring_pmt_count] = options[:recurring_pmt_count] if options[:recurring_pmt_count]
         post[:card_on_file] = options[:card_on_file] if options[:card_on_file]
         post[:cit_mit_indicator] = options[:cit_mit_indicator] if options[:cit_mit_indicator]
         post[:account_data_source] = options[:account_data_source] if options[:account_data_source]
+        # Merchant-initiated transaction flag, AN(1), 'Y' or 'N' (default). The spec
+        # pairs merchant_initiated=Y with card_on_file=Y, account_data_source=Y and
+        # an M1xx cit_mit_indicator. Not exercised by the MeS certification script
+        # (which only uses C101, cardholder-initiated) but required for correct MIT
+        # identification and interchange qualification.
+        post[:merchant_initiated] = options[:merchant_initiated] if options[:merchant_initiated]
         # Subsequent CIT/MIT requires the transaction_id of the prior approved
         # authorization for these credentials. capture/refund/void take it as a
         # positional argument; on authorize/purchase it can only arrive via options.
